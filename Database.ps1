@@ -13,10 +13,10 @@ if($null -ne $args[0]){
     $frameworks =  Get-ChildItem –Path $path | ?{ $_.PSIsContainer } | Select-Object Name,FullName
     foreach ($framework in $frameworks){
 
-        $moduleNodes = @{}
+       $moduleNodes = @{}
 
-        $f = $doc.CreateNode("element","Framework",$null)
-        $f.SetAttribute("Name",$framework.Name)
+       $f = $doc.CreateNode("element","Framework",$null)
+       $f.SetAttribute("Name",$framework.Name)
     
  
        #Chemin des dossiers des interfaces
@@ -28,47 +28,50 @@ if($null -ne $args[0]){
             $headerPublicInterfaces = Get-ChildItem –Path $pathPublicInterfaces -Filter '*.h'| Select-Object Name,FullName
        }
    
-       if(Test-Path  $pathProtectedInterfaces){
+        if(Test-Path  $pathProtectedInterfaces){
             $headerProtectedInterfaces = Get-ChildItem –Path $pathProtectedInterfaces -Filter '*.h' | Select-Object Name,FullName
-       }
+        }
    
-       #Liste des modules du framework
-       $modules = Get-ChildItem -Path $framework.FullName | ?{ $_.PSIsContainer } | Where-Object { ($_.Name -like '*.m') } | % { $_.Name} | % {$_.replace(".m","")}
-   
-       foreach($module in $modules){
+        #Liste des modules du framework
+        $modules = Get-ChildItem -Path $framework.FullName | ?{ $_.PSIsContainer } | Where-Object { ($_.Name -like '*.m') } | % { $_.Name} | % {$_.replace(".m","")}
+        $listHeadersByModule = @{}
+
+
+        foreach($module in $modules){
    
            #header ou y a exportedby $module  
-           $listHeadersByModule = @{}
-           $listHeadersByModule[$module] = @()
+            $listHeadersByModule[$module] = @{}
+            $listHeadersByModule[$module]["protected"] = @()
+            $listHeadersByModule[$module]["public"] = @()
        
-           #liste des modules d'un framework 
-           $moduleNode = $doc.CreateNode("element","Module",$null)
-           $moduleNode.SetAttribute("Name", $module)
-           $moduleNodes.Add($module, $moduleNode)
-       }
+            #liste des modules d'un framework 
+            $moduleNode = $doc.CreateNode("element","Module",$null)
+            $moduleNode.SetAttribute("Name", $module)
+            $moduleNodes.Add($module, $moduleNode)
+        }
    
-       foreach($lm in $modules){
-           $f.AppendChild($moduleNodes[$lm]) >$null
-       }
+        foreach($lm in $modules){
+            $f.AppendChild($moduleNodes[$lm]) >$null
+        }
    
    
        #Recuparation des modules associés au headers
-       $regexGetModule = ' ExportedBy([^ ]*)'
+        $regexGetModule = ' ExportedBy([^ ]*)'
    
         #Public headers by modules in framework
+        $modulesPublicHeaders = @{}
+
         if ($null -ne $headerPublicInterfaces)
         {
             foreach($header in $headerPublicInterfaces){
-                $modulesPublicHeaders =  select-string -Path $header.FullName -Pattern $regexGetModule  | % { $_.Matches } | % { $_.Value} | % {$_.replace(" ExportedBy","")} | Get-unique              
-                if ($null -ne $modulesPublicHeaders)
+                $modulesPublicHeaders[$header] =  select-string -Path $header.FullName -Pattern $regexGetModule  | % { $_.Matches } | % { $_.Value} | % {$_.replace(" ExportedBy","")} | Get-unique              
+                if ($null -ne $modulesPublicHeaders[$header])
                 {
-                        foreach($module in $modulesPublicHeaders){
-                            $listHeadersByModule[$module] += ,$header
-                        }
+                    foreach($module in $modulesPublicHeaders[$header]){
+                        $listHeadersByModule[$module]["public"] += ,$header
+                    }
                 }
-            
             }
-        
 
         }
     
@@ -79,60 +82,49 @@ if($null -ne $args[0]){
                 $modulesProtectedHeaders =  select-string -Path $header.FullName -Pattern $regexGetModule  | % { $_.Matches } | % { $_.Value} | % {$_.replace(" ExportedBy","")} | Get-unique
                 if ($null -ne $modulesProtectedHeaders)
                 {
-                         foreach($module in $modulesProtectedHeaders){
-                            $listHeadersByModule[$module] += ,$header
-                         }
+                    foreach($module in $modulesProtectedHeaders){
+                        $listHeadersByModule[$module]["protected"] += ,$header
+                    }
                 }   
             }
-        }    
+        }
 
-
+ 
+                
         #Creation XML pr les headers publics
-        if ($null -ne $modulesPublicHeaders)
-        {
-            
-            foreach($module in $modulesPublicHeaders){
-
-                if ($null -ne $listHeadersByModule[$module])
+        foreach($module in $modules){
+            if ($null -ne $listHeadersByModule[$module] )
+            {     
+                if ($null -ne $listHeadersByModule[$module]["public"] -and $listHeadersByModule[$module]["public"].Count -ge 1)
                 {
-
-                        Write-Output $listHeadersByModule[$module]
-
-                        $balisePublic = $doc.CreateNode("element","Public",$null)
-                        foreach($h in $listHeadersByModule[$module]){
-                            $baliseHeader = $doc.CreateNode("element","Header",$null)
-                            $baliseHeader.SetAttribute("Name", $h.Name)
-                            $baliseHeader.SetAttribute("Fullname", $h.FullName)
-                            $balisePublic.AppendChild($baliseHeader) > $null
-                        }
-                        ($moduleNodes[$module]).AppendChild($balisePublic) > $null
+                    $balisePublic = $doc.CreateNode("element","Public",$null)
+                    foreach($h in $listHeadersByModule[$module]["public"]){
+                        $baliseHeader = $doc.CreateNode("element","Header",$null)
+                        $baliseHeader.SetAttribute("Name", $h.Name)
+                        $baliseHeader.SetAttribute("Fullname", $h.FullName)
+                        $balisePublic.AppendChild($baliseHeader) > $null
+                    }
+                    ($moduleNodes[$module]).AppendChild($balisePublic) > $null
                 }
             }
-       
         }
     
-    
         #Creation XML pr les headers protected
-        if ($null -ne $modulesProtectedHeaders)
-        {
-          
-
-          foreach($module in $modulesProtectedHeaders){
-                
-                if ($null -ne $listHeadersByModule[$module])
-                {
-                        
-                        $baliseProtected = $doc.CreateNode("element","Protected",$null)
-                        foreach($h in $listHeadersByModule[$module]){
+        foreach($module in $modules){
+            if ($null -ne $listHeadersByModule[$module])
+            {
+                if ($null -ne $listHeadersByModule[$module]["protected"] -and $listHeadersByModule[$module]["protected"].Count -ge 1)
+                {        
+                    $baliseProtected = $doc.CreateNode("element","Protected",$null)
+                        foreach($h in $listHeadersByModule[$module]["protected"]){
                             $baliseHeader = $doc.CreateNode("element","Header",$null)
                             $baliseHeader.SetAttribute("Name", $h.Name)
                             $baliseHeader.SetAttribute("Fullname", $h.FullName)
                             $baliseProtected.AppendChild($baliseHeader) > $null
                         }  
-                        ($moduleNodes[$module]).AppendChild($baliseProtected) > $null
+                    ($moduleNodes[$module]).AppendChild($baliseProtected) > $null
                 }
-           }
-       
+            }
         }
         $root.AppendChild($f) > $null
     }
